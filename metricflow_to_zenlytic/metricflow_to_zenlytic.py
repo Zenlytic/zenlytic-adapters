@@ -1,30 +1,65 @@
 import yaml
 from glob import glob
-import argparse
 import os
 import re
 
 from .metricflow_types import MetricflowMetricTypes
 
-# parser = argparse.ArgumentParser(description="Convert Metricflow to Zenlytic.")
-# parser.add_argument("--project_name", type=str, help="The name of the Metricflow project.", required=False)
-# args = parser.parse_args()
+
+def convert_mf_project_to_zenlytic_project(
+    mf_project: dict, project_name: str = "mf_project_name", connection_name: str = "mf_connection_name"
+):
+    """mf_project is a dict with keys for each semantic model
+    and the dims, measures, and metrics associated with it
+    """
+    all_measures = []
+    for semantic_model in mf_project.values():
+        all_measures.extend(semantic_model.get("measures", []))
+
+    model = {"version": 1, "type": "model", "name": project_name, "connection": connection_name}
+    views = []
+    for _, semantic_model in mf_project.items():
+        views.append(convert_mf_view_to_zenlytic_view(semantic_model, all_measures))
+
+    return [model], views
 
 
-def mf_dict_to_zen_views(yaml_data, original_file_path=None):
-    zen_fields = []
-    for semantic_model in yaml_data["semantic_models"]:
-        zenlytic_data = convert_mf_view_to_zenlytic_view(
-            semantic_model, yaml_data.get("metrics", []), original_file_path
-        )
-        zen_fields.append(zenlytic_data)
-    return zen_fields
+def load_mf_project(models_folder: str):
+    semantic_models, metrics = {}, []
+    for fn in read_mf_project_files(models_folder):
+        mf_model_dict = convert_yml_to_dict(fn)
+
+        metrics.extend(mf_model_dict.get("metrics", []))
+        for semantic_model in mf_model_dict.get("semantic_models", []):
+            semantic_models[semantic_model["name"]] = semantic_model
+            # Empty list of metrics to be filled below
+            semantic_models[semantic_model["name"]]["metrics"] = []
+
+    # Assign metrics to the view they should logically live in
+    for metric in metrics:
+        type_params = metric["type_params"]
+        if metric["type"] in {MetricflowMetricTypes.simple, MetricflowMetricTypes.cumulative}:
+            metric_measure = type_params["measure"]
+        elif metric["type"] == MetricflowMetricTypes.ratio:
+            metric_measure = type_params["numerator"]
+        elif metric["type"] == MetricflowMetricTypes.derived:
+            metric_measure = type_params["metrics"][0]["name"]
+
+        for model_name, semantic_model in semantic_models.items():
+            for measure in semantic_model.get("measures", []):
+                if metric_measure == measure["name"]:
+                    semantic_models[model_name]["metrics"].append(metric)
+                    break
+
+    return semantic_models
 
 
 def convert_mf_view_to_zenlytic_view(
-    mf_semantic_model: dict, mf_metrics: list, original_file_path: str = None
+    mf_semantic_model: dict, all_measures: list, original_file_path: str = None
 ):
     zenlytic_data = {"version": 1, "type": "view", "fields": [], "identifiers": []}
+
+    mf_metrics = mf_semantic_model.get("metrics", [])
 
     if original_file_path:
         zenlytic_data["original_file_path"] = original_file_path
@@ -49,8 +84,9 @@ def convert_mf_view_to_zenlytic_view(
         zenlytic_data["fields"].append(field_dict)
 
     for metric in mf_metrics:
-        metric_dict = convert_mf_metric_to_zenlytic_measure(metric)
+        metric_dict, added_measures = convert_mf_metric_to_zenlytic_measure(metric, all_measures)
         zenlytic_data["fields"].append(metric_dict)
+        zenlytic_data["fields"].extend(added_measures)
 
     # entities to identifiers
     for entity in mf_semantic_model["entities"]:
@@ -142,7 +178,6 @@ def convert_mf_metric_to_zenlytic_measure(mf_metric: dict, measures: list) -> li
         "label": mf_metric.get("label", mf_metric["name"].replace("_", " ").title()),
         "field_type": "measure",
     }
-    print(mf_metric)
 
     additional_measures = []
     if mf_metric["type"].lower() == "cumulative":
@@ -221,7 +256,7 @@ def convert_mf_metric_to_zenlytic_measure(mf_metric: dict, measures: list) -> li
     if "meta" in mf_metric:
         metric_dict["extra"] = mf_metric["meta"]
 
-    return metric_dict
+    return metric_dict, additional_measures
 
 
 def _get_measure(measure_name: str, measures: list):
@@ -248,10 +283,7 @@ def apply_filter_to_metric(
 
 
 def apply_filter_to_sql(sql, filter):
-    print(sql)
-    print(filter)
     filter_sql = _extract_filter_sql(filter)
-    print(filter_sql)
     return f"case when {filter_sql} then {sql} else null end"
 
 
@@ -262,34 +294,13 @@ def _extract_filter_sql(filter_string):
     """
     matches = re.findall(r"{{\s*Dimension\('(.+?)'\)\s*}}\s*([=><!]+)\s*(.+?)\s*(and|or|$)", filter_string)
     for match in matches:
-        print(match)
         column_name = match[0].replace("__", ".")
         # operator = match[1]
         # value = match[2]
         replacement = "${" + column_name + "}"
-        print(replacement)
         filter_string = filter_string.replace(f"Dimension('{match[0]}')", replacement)
         filter_string = filter_string.replace("{{", "").replace("}}", "")
-        print(filter_string)
     return filter_string
-    #     def _apply_dbt_filters(self, metric_sql: str, metric: dict):
-    #     filters = metric.get("filters", [])
-    #     if len(filters) == 0:
-    #         return metric_sql
-    #     components = []
-    #     for f in filters:
-    #         f_sql = self._dbt_filter_to_sql(f, metric.get("timestamp"), metric.get("time_grains", []))
-    #         components.append(f_sql)
-    #     core_filter = " and ".join(components)
-    #     return f"case when {core_filter} then {metric_sql} else null end"
-
-    # @staticmethod
-    # def _dbt_filter_to_sql(dbt_filter: dict, timestamp: str, timeframes: list):
-    #     field_name = dbt_filter["field"].lower()
-    #     if field_name == timestamp.lower() and len(timeframes) > 0:
-    #         field_name += "_" + timeframes[0].replace("day", "date")
-    #     sql = " ".join(["${" + field_name + "}", dbt_filter["operator"], dbt_filter["value"]])
-    #     return sql
 
 
 def convert_yml_to_dict(yml_path):
@@ -332,36 +343,6 @@ def zen_views_to_yaml(zenlytic_data, project_name, write_to_file=True):
     return views_yaml
 
 
-def load_mf_project(models_folder: str):
-    semantic_models, metrics = {}, []
-    for fn in read_mf_project_files(models_folder):
-        mf_model_dict = convert_yml_to_dict(fn)
-
-        metrics.extend(mf_model_dict.get("metrics", []))
-        for semantic_model in mf_model_dict.get("semantic_models", []):
-            semantic_models[semantic_model["name"]] = semantic_model
-            # Empty list of metrics to be filled below
-            semantic_models[semantic_model["name"]]["metrics"] = []
-
-    # Assign metrics to the view they should logically live in
-    for metric in metrics:
-        type_params = metric["type_params"]
-        if metric["type"] in {MetricflowMetricTypes.simple, MetricflowMetricTypes.cumulative}:
-            metric_measure = type_params["measure"]
-        elif metric["type"] == MetricflowMetricTypes.ratio:
-            metric_measure = type_params["numerator"]
-        elif metric["type"] == MetricflowMetricTypes.derived:
-            metric_measure = type_params["metrics"][0]["name"]
-
-        for model_name, semantic_model in semantic_models.items():
-            for measure in semantic_model.get("measures", []):
-                if metric_measure == measure["name"]:
-                    semantic_models[model_name]["metrics"].append(metric)
-                    break
-
-    return semantic_models
-
-
 def read_mf_project_files(models_folder: str):
     """Returns a list of all the yml files in the Metricflow project.
     Args:
@@ -370,21 +351,3 @@ def read_mf_project_files(models_folder: str):
     yml_files = glob(f"{models_folder}**/*.yml", recursive=True)
     yaml_files = glob(f"{models_folder}**/*.yaml", recursive=True)
     return yml_files + yaml_files
-
-
-# def main(project_name=args.project_name):
-#     # for each directory in project_name/models
-#     for model in glob(project_name + "/models/*/*.yml"):
-#         if "staging" in model:
-#             continue
-#         print(model)
-#         # convert the yaml to a dictionary
-#         mf_yml = convert_yml_to_dict(model)
-#         # convert the dictionary to zenlytic views
-#         zen_views = mf_dict_to_zen_views(mf_yml, original_file_path=model)
-#         # convert the zenlytic views to yaml
-#         zen_views_to_yaml(zen_views, project_name)
-
-
-# if __name__ == "__main__":
-#     main()

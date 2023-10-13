@@ -209,7 +209,7 @@ def test_metric_conversion(mf_metric):
         {"name": "order_total", "agg": "sum", "expr": "num_order_total"},
         {"name": "order_cost", "agg": "sum", "expr": "num_order_cost"},
     ]
-    converted = convert_mf_metric_to_zenlytic_measure(mf_metric, measures)
+    converted, _ = convert_mf_metric_to_zenlytic_measure(mf_metric, measures)
 
     if mf_metric["name"] == "cumulative_metric":
         correct = {

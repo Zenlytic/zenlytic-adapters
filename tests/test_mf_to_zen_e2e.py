@@ -1,9 +1,7 @@
 import pytest
 from metricflow_to_zenlytic.metricflow_to_zenlytic import (
-    convert_yml_to_dict,
     load_mf_project,
-    mf_dict_to_zen_views,
-    zen_views_to_yaml,
+    convert_mf_project_to_zenlytic_project,
 )
 import os
 
@@ -22,32 +20,53 @@ def test_e2e_read_project():
     assert any("customers_with_orders" in m["name"] for m in metricflow_project["orders"]["metrics"])
 
 
-# @pytest.mark.e2e
-# @pytest.mark.parametrize(
-#     "metricflow_file, zenlytic_file",
-#     [
-#         ("metricflow/customers.yml", "zenlytic/views/customers.yml"),
-#         # ("metricflow/orders.yml", "zenlytic/views/orders.yml"),
-#         # ("metricflow/order_items.yml", "zenlytic/views/order_items.yml"),
-#     ],
-# )
-# def test_e2e_conversions(metricflow_file, zenlytic_file):
-#     metricflow_path = os.path.join(BASE_PATH, metricflow_file)
-#     zenlytic_path = os.path.join(BASE_PATH, zenlytic_file)
+@pytest.mark.e2e
+def test_e2e_conversions():
+    metricflow_folder = os.path.join(BASE_PATH, "metricflow")
 
-#     # convert the yaml to a dictionary
-#     mf_yml = convert_yml_to_dict(metricflow_path)
-#     # convert the dictionary to zenlytic views
-#     zen_views = mf_dict_to_zen_views(mf_yml)
-#     # convert the zenlytic views to yaml
-#     views = zen_views_to_yaml(zen_views, os.path.join(BASE_PATH, "zenlytic"), write_to_file=False)
+    metricflow_project = load_mf_project(metricflow_folder)
+    models, views = convert_mf_project_to_zenlytic_project(metricflow_project, "my_model", "my_company")
 
-#     # read test_zen_yml
-#     with open(zenlytic_path, "r") as f:
-#         zen_yml = f.read()
+    print(views)
 
-#     # assert that zen_yml equals one of the views
-#     print(zen_yml)
-#     print("---")
-#     print(views[-1])
-#     assert zen_yml in views
+    assert len(models) == 1
+    assert models[0]["name"] == "my_model"
+    assert models[0]["connection"] == "my_company"
+
+    assert len(views) == 3
+
+    customers_view = next(v for v in views if v["name"] == "customers")
+
+    # All measures are hidden in this view, because there are no metrics
+    assert all(f["hidden"] for f in customers_view["fields"] if f["field_type"] == "measure")
+
+    orders_view = next(v for v in views if v["name"] == "orders")
+
+    customers_with_fields_metric = next(
+        m for m in orders_view["fields"] if "customers_with_orders" == m["name"]
+    )
+    assert customers_with_fields_metric["field_type"] == "measure"
+    assert not customers_with_fields_metric["hidden"]
+    assert customers_with_fields_metric["sql"] == "customer_id"
+    assert customers_with_fields_metric["type"] == "count_distinct"
+    assert customers_with_fields_metric["label"] == "Customers w/ Orders"
+    assert customers_with_fields_metric["description"] == "Distict count of customers placing orders"
+
+    order_total_dim = next(m for m in orders_view["fields"] if "order_total_dim" == m["name"])
+    assert order_total_dim["field_type"] == "dimension"
+    assert order_total_dim["sql"] == "order_total"
+    assert order_total_dim["type"] == "string"
+
+    large_orders_metric = next(m for m in orders_view["fields"] if "large_order" == m["name"])
+    assert large_orders_metric["field_type"] == "measure"
+    assert not large_orders_metric["hidden"]
+    assert large_orders_metric["sql"] == "case when  ${orders.order_total_dim}  >= 20\n then 1 else null end"
+
+    order_item_view = next(v for v in views if v["name"] == "order_item")
+
+    assert order_item_view["identifiers"][0]["name"] == "order_item"
+    assert order_item_view["identifiers"][0]["type"] == "primary"
+    assert order_item_view["identifiers"][0]["sql"] == "${order_item_id}"
+    assert order_item_view["identifiers"][1]["name"] == "order_id"
+    assert order_item_view["identifiers"][1]["type"] == "foreign"
+    assert order_item_view["identifiers"][1]["sql"] == "${order_id}"
