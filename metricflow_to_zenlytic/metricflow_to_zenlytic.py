@@ -4,12 +4,296 @@ import argparse
 import os
 import re
 
-parser = argparse.ArgumentParser(description='Convert Metricflow to Zenlytic.')
-parser.add_argument('--project_name', type=str, help='The name of the Metricflow project.', required=False)
-args = parser.parse_args()
+from .metricflow_types import MetricflowMetricTypes
 
-def convert_mf_yml_to_dict(yml_path):
-    with open(yml_path, 'r') as stream:
+# parser = argparse.ArgumentParser(description="Convert Metricflow to Zenlytic.")
+# parser.add_argument("--project_name", type=str, help="The name of the Metricflow project.", required=False)
+# args = parser.parse_args()
+
+
+def mf_dict_to_zen_views(yaml_data, original_file_path=None):
+    zen_fields = []
+    for semantic_model in yaml_data["semantic_models"]:
+        zenlytic_data = convert_mf_view_to_zenlytic_view(
+            semantic_model, yaml_data.get("metrics", []), original_file_path
+        )
+        zen_fields.append(zenlytic_data)
+    return zen_fields
+
+
+def convert_mf_view_to_zenlytic_view(
+    mf_semantic_model: dict, mf_metrics: list, original_file_path: str = None
+):
+    zenlytic_data = {"version": 1, "type": "view", "fields": [], "identifiers": []}
+
+    if original_file_path:
+        zenlytic_data["original_file_path"] = original_file_path
+
+    # Get view-level values
+    zenlytic_data["name"] = mf_semantic_model["name"]
+    zenlytic_data["model_name"] = extract_inner_text(mf_semantic_model["model"])
+    zenlytic_data["description"] = mf_semantic_model.get("description", None)
+    default_date = mf_semantic_model.get("defaults", {}).get("agg_time_dimension")
+
+    if default_date:
+        zenlytic_data["default_date"] = default_date
+
+    # dimensions to fields.dimensions
+    for dimension in mf_semantic_model.get("dimensions", []):
+        field_dict = convert_mf_dimension_to_zenlytic_dimension(dimension)
+        zenlytic_data["fields"].append(field_dict)
+
+    # measures to measures
+    for measure in mf_semantic_model.get("measures", []):
+        field_dict = convert_mf_measure_to_zenlytic_measure(measure)
+        zenlytic_data["fields"].append(field_dict)
+
+    for metric in mf_metrics:
+        metric_dict = convert_mf_metric_to_zenlytic_measure(metric)
+        zenlytic_data["fields"].append(metric_dict)
+
+    # entities to identifiers
+    for entity in mf_semantic_model["entities"]:
+        if "name" in entity:
+            identifier = convert_mf_entity_to_zenlytic_identifier(entity)
+            zenlytic_data["identifiers"].append(identifier)
+
+    return zenlytic_data
+
+
+def convert_mf_dimension_to_zenlytic_dimension(mf_dimension: dict):
+    field_dict = {
+        "name": mf_dimension["name"],
+        "sql": mf_dimension["expr"] if "expr" in mf_dimension else mf_dimension["name"],
+    }
+
+    if mf_dimension["type"] == "time":
+        field_dict["field_type"] = "dimension_group"
+        field_dict["type"] = "time"
+        field_dict["timeframes"] = ["raw", "date", "week", "month", "quarter", "year", "month_of_year"]
+
+    elif mf_dimension["type"] == "categorical":
+        field_dict["field_type"] = "dimension"
+        field_dict["type"] = "string"
+
+    if description := mf_dimension.get("description"):
+        field_dict["description"] = description
+
+    if label := mf_dimension.get("label"):
+        field_dict["label"] = label
+
+    return field_dict
+
+
+def convert_mf_measure_to_zenlytic_measure(mf_measure: dict):
+    field_dict = {
+        "name": mf_measure["name"],
+        "sql": mf_measure["expr"] if "expr" in mf_measure else mf_measure["name"],
+        "type": mf_measure["agg"],
+        "field_type": "measure",
+    }
+
+    if not mf_measure.get("create_metric", False):
+        field_dict["hidden"] = True
+        # If we are not creating this metric directly, we need to set an underscore
+        # in front of the metric name to stop collisions with metrics that have
+        # the exact same name
+        field_dict["name"] = "_" + field_dict["name"]
+
+    if field_dict["type"] == "sum_boolean":
+        field_dict["type"] = "sum"
+        field_dict["sql"] = f"CAST({field_dict['sql']} AS INT)"
+
+    if canon_date := mf_measure.get("agg_time_dimension"):
+        field_dict["canon_date"] = canon_date
+
+    if description := mf_measure.get("description"):
+        field_dict["description"] = description
+
+    if label := mf_measure.get("label"):
+        field_dict["label"] = label
+
+    return field_dict
+
+
+def convert_mf_entity_to_zenlytic_identifier(mf_entity: dict):
+    # if expr is a simple string, use it as the sql otherwise use it as given as a sql snippet
+    if "expr" in mf_entity:
+        if any(char in mf_entity["expr"] for char in [" ", "(", ")"]):
+            sql = mf_entity["expr"]
+        else:
+            sql = "${" + mf_entity["expr"] + "}"
+    else:
+        sql = "${" + mf_entity["name"] + "}"
+
+    return {
+        "name": mf_entity["name"],
+        "type": mf_entity["type"] if mf_entity["type"] != "unique" else "primary",
+        "sql": sql,
+    }
+
+
+def convert_mf_metric_to_zenlytic_measure(mf_metric: dict, measures: list) -> list:
+    """This returns a list because metrics with filters applied can
+    result in an additional measure(s) being created
+    """
+    metric_dict = {
+        "name": mf_metric["name"],
+        "label": mf_metric.get("label", mf_metric["name"].replace("_", " ").title()),
+        "field_type": "measure",
+    }
+    print(mf_metric)
+
+    additional_measures = []
+    if mf_metric["type"].lower() == "cumulative":
+        metric_dict["type"] = "cumulative"
+        metric_dict["measure"] = "_" + mf_metric["type_params"]["measure"]
+
+    elif mf_metric["type"].lower() == "simple":
+        associated_measure = _get_measure(mf_metric["type_params"]["measure"], measures)
+        metric_dict, _ = apply_filter_to_metric(
+            associated_measure, mf_metric, extra_metric_params=metric_dict
+        )
+
+    elif mf_metric["type"].lower() == "ratio":
+        metric_dict["type"] = "ratio"
+        numerator = mf_metric["type_params"]["numerator"]
+        denominator = mf_metric["type_params"]["denominator"]
+        if isinstance(numerator, str):
+            numerator_sql = "${_" + numerator + "}"
+        else:
+            # If there's a filter, re-write the sql to include the filter
+            if "filter" in numerator:
+                associated_numerator = _get_measure(numerator["name"], measures)
+                numerator_dict, numerator_measures = apply_filter_to_metric(
+                    associated_numerator, numerator, new_measure_name=mf_metric["name"] + "_numerator"
+                )
+                numerator_sql = "${" + numerator_dict["name"] + "}"
+                additional_measures.extend(numerator_measures)
+            else:
+                numerator_sql = "${_" + numerator["name"] + "}"
+
+        if isinstance(denominator, str):
+            denominator_sql = "${_" + denominator + "}"
+        else:
+            # If there's a filter, re-write the sql to include the filter
+            if "filter" in denominator:
+                associated_denominator = _get_measure(denominator["name"], measures)
+                denominator_dict, denominator_measures = apply_filter_to_metric(
+                    associated_denominator, denominator, new_measure_name=mf_metric["name"] + "_denominator"
+                )
+                denominator_sql = "${" + denominator_dict["name"] + "}"
+                additional_measures.extend(denominator_measures)
+            else:
+                denominator_sql = "${_" + denominator["name"] + "}"
+
+        metric_dict["sql"] = numerator_sql + " / " + denominator_sql
+        metric_dict["type"] = "number"
+
+    elif mf_metric["type"].lower() == "derived":
+        metric_dict["type"] = "number"
+        expr = mf_metric["type_params"]["expr"]
+        referenced_metrics = mf_metric["type_params"]["metrics"]
+        for metric in referenced_metrics:
+            if "alias" in metric and "filter" not in metric:
+                expr = expr.replace(metric["alias"], "${_" + metric["name"] + "}")
+            elif "alias" in metric and "filter" in metric:
+                associated_measure = _get_measure(metric["name"], measures)
+                measure_dict, added_measures = apply_filter_to_metric(
+                    associated_measure, metric, new_measure_name=mf_metric["name"] + f"_{metric['alias']}"
+                )
+                additional_measures.extend(added_measures)
+                expr = expr.replace(metric["alias"], "${" + measure_dict["name"] + "}")
+            else:
+                # If there is no alias and no filters we just need to add reference syntax
+                expr = expr.replace(metric["name"], "${_" + metric["name"] + "}")
+        metric_dict["sql"] = expr
+
+    else:
+        raise TypeError(f"Metric type {mf_metric['type']} not supported")
+
+    if description := mf_metric.get("description"):
+        metric_dict["description"] = description
+
+    if "agg_time_dimension" in mf_metric:
+        metric_dict["canon_date"] = mf_metric["agg_time_dimension"]
+
+    if "meta" in mf_metric:
+        metric_dict["extra"] = mf_metric["meta"]
+
+    return metric_dict
+
+
+def _get_measure(measure_name: str, measures: list):
+    try:
+        return next((m for m in measures if m["name"] == measure_name))
+    except StopIteration:
+        raise ValueError(f"Could not find associated measure {measure_name}")
+
+
+def apply_filter_to_metric(
+    mf_measure: dict, mf_metric: dict, extra_metric_params: dict = {}, new_measure_name: str = None
+):
+    measure_dict = convert_mf_measure_to_zenlytic_measure(mf_measure)
+    metric_dict = {**measure_dict, **extra_metric_params, "hidden": False}
+
+    # If there's a filter, re-write the sql to include the filter
+    additional_measures = []
+    if "filter" in mf_metric:
+        metric_dict["sql"] = apply_filter_to_sql(metric_dict["sql"], mf_metric["filter"])
+        if new_measure_name:
+            metric_dict["name"] = new_measure_name
+            additional_measures.append(metric_dict)
+    return metric_dict, additional_measures
+
+
+def apply_filter_to_sql(sql, filter):
+    print(sql)
+    print(filter)
+    filter_sql = _extract_filter_sql(filter)
+    print(filter_sql)
+    return f"case when {filter_sql} then {sql} else null end"
+
+
+def _extract_filter_sql(filter_string):
+    """A filter will look like
+    "{{ Dimension('order__is_food_order') }} = True
+    We want to turn it into a valid filter statement like ${order.is_food_order} = True
+    """
+    matches = re.findall(r"{{\s*Dimension\('(.+?)'\)\s*}}\s*([=><!]+)\s*(.+?)\s*(and|or|$)", filter_string)
+    for match in matches:
+        print(match)
+        column_name = match[0].replace("__", ".")
+        # operator = match[1]
+        # value = match[2]
+        replacement = "${" + column_name + "}"
+        print(replacement)
+        filter_string = filter_string.replace(f"Dimension('{match[0]}')", replacement)
+        filter_string = filter_string.replace("{{", "").replace("}}", "")
+        print(filter_string)
+    return filter_string
+    #     def _apply_dbt_filters(self, metric_sql: str, metric: dict):
+    #     filters = metric.get("filters", [])
+    #     if len(filters) == 0:
+    #         return metric_sql
+    #     components = []
+    #     for f in filters:
+    #         f_sql = self._dbt_filter_to_sql(f, metric.get("timestamp"), metric.get("time_grains", []))
+    #         components.append(f_sql)
+    #     core_filter = " and ".join(components)
+    #     return f"case when {core_filter} then {metric_sql} else null end"
+
+    # @staticmethod
+    # def _dbt_filter_to_sql(dbt_filter: dict, timestamp: str, timeframes: list):
+    #     field_name = dbt_filter["field"].lower()
+    #     if field_name == timestamp.lower() and len(timeframes) > 0:
+    #         field_name += "_" + timeframes[0].replace("day", "date")
+    #     sql = " ".join(["${" + field_name + "}", dbt_filter["operator"], dbt_filter["value"]])
+    #     return sql
+
+
+def convert_yml_to_dict(yml_path):
+    with open(yml_path, "r") as stream:
         try:
             yaml_data = yaml.safe_load(stream)
             return yaml_data
@@ -17,76 +301,13 @@ def convert_mf_yml_to_dict(yml_path):
             print(exc)
     return None
 
+
 def extract_inner_text(s):
     match = re.search(r"ref\('(.*)'\)", s)
     if match:
         return match.group(1)
     return None
 
-def mf_dict_to_zen_views(yaml_data, original_file_path=None):
-    zen_fields = []
-    for i, semantic_model in enumerate(yaml_data["semantic_models"]):
-        zenlytic_data = {
-            "fields": [],
-            "identifiers": [],
-        }
-
-        if original_file_path:
-            zenlytic_data["original_file_path"] = original_file_path
-
-        # get view-level values
-        zenlytic_data['name'] = yaml_data['semantic_models'][i]['name']
-        zenlytic_data['description'] = yaml_data['semantic_models'][i]['description']
-        zenlytic_data['default_date'] = yaml_data['semantic_models'][i]['defaults']['agg_time_dimension']
-
-        zenlytic_data["model_name"] = extract_inner_text(yaml_data['semantic_models'][i]["model"])
-
-        # dimensions to fields.dimensions
-        for dimension in yaml_data['semantic_models'][i]["dimensions"]:
-            field_dict = {
-                "name": dimension["name"],
-                "sql": dimension["expr"] if "expr" in dimension else None,
-            }
-            if dimension['type'] == "time":
-                field_dict["field_type"] = "dimension_group"
-                field_dict["type"] = "time"
-            elif dimension["type"] == "categorical":
-                field_dict["field_type"] = "dimension"
-                field_dict["type"] = "string"
-
-            # handle mf type_params?
-            zenlytic_data["fields"].append(field_dict)
-
-        # metrics to measures
-        if "metrics" in yaml_data:
-            for metric in yaml_data["metrics"]:
-                metric_dict = {
-                    "name": metric["name"],
-                    "field_type": "measure",
-                    "sql": metric["expr"] if "expr" in metric else None,
-                    "type": metric["agg"] if "agg" in metric else None, # not all types map 1:1
-                    "label": metric["label"],
-                }
-                if "agg_time_dimension" in metric:
-                    metric_dict["canon_time"] = metric["agg_time_dimension"]
-                if "meta" in metric:
-                    metric_dict["extra"] = metric["meta"]
-
-                zenlytic_data["fields"].append(metric_dict)
-
-        # entities to identifiers
-        for entity in yaml_data['semantic_models'][i]["entities"]:
-            if "name" in entity:
-                zenlytic_data["identifiers"].append({
-                    "name": entity["name"],
-                    "type": entity["type"] if entity["type"] != "unique" else "primary",
-                    "sql": entity["expr"] if "expr" in entity else None,
-                    # "type": entity["type"], # does not map 1:1
-                })
-        
-        zen_fields.append(zenlytic_data)
-    
-    return zen_fields
 
 def zen_views_to_yaml(zenlytic_data, project_name, write_to_file=True):
     views_dir = project_name + "/views"
@@ -98,31 +319,72 @@ def zen_views_to_yaml(zenlytic_data, project_name, write_to_file=True):
         # write the yaml to views/model_name.yml
         if write_to_file:
             og_file_path = zen_view["original_file_path"]
-            
+
             # get the model name from the original file path
             model_name = og_file_path.split("/")[-1].split(".")[0]
             # write the yaml to views/model_name.yml
-            with open(views_dir + "/" + model_name + ".yml", 'w') as outfile:
+            with open(views_dir + "/" + model_name + ".yml", "w") as outfile:
                 yaml.dump(zen_view, outfile, default_flow_style=False)
-
 
         # add the yaml string to views_yaml
         views_yaml.append(yaml.dump(zen_view, default_flow_style=False))
 
     return views_yaml
 
-def main(project_name=args.project_name):
-    # for each directory in project_name/models
-    for model in glob(project_name + '/models/*/*.yml'):
-        if "staging" in model:
-            continue
-        print(model)
-        # convert the yaml to a dictionary
-        mf_yml = convert_mf_yml_to_dict(model)
-        # convert the dictionary to zenlytic views
-        zen_views = mf_dict_to_zen_views(mf_yml, original_file_path=model)
-        # convert the zenlytic views to yaml
-        zen_views_to_yaml(zen_views, project_name)
 
-if __name__=="__main__":
-    main()
+def load_mf_project(models_folder: str):
+    semantic_models, metrics = {}, []
+    for fn in read_mf_project_files(models_folder):
+        mf_model_dict = convert_yml_to_dict(fn)
+
+        metrics.extend(mf_model_dict.get("metrics", []))
+        for semantic_model in mf_model_dict.get("semantic_models", []):
+            semantic_models[semantic_model["name"]] = semantic_model
+            # Empty list of metrics to be filled below
+            semantic_models[semantic_model["name"]]["metrics"] = []
+
+    # Assign metrics to the view they should logically live in
+    for metric in metrics:
+        type_params = metric["type_params"]
+        if metric["type"] in {MetricflowMetricTypes.simple, MetricflowMetricTypes.cumulative}:
+            metric_measure = type_params["measure"]
+        elif metric["type"] == MetricflowMetricTypes.ratio:
+            metric_measure = type_params["numerator"]
+        elif metric["type"] == MetricflowMetricTypes.derived:
+            metric_measure = type_params["metrics"][0]["name"]
+
+        for model_name, semantic_model in semantic_models.items():
+            for measure in semantic_model.get("measures", []):
+                if metric_measure == measure["name"]:
+                    semantic_models[model_name]["metrics"].append(metric)
+                    break
+
+    return semantic_models
+
+
+def read_mf_project_files(models_folder: str):
+    """Returns a list of all the yml files in the Metricflow project.
+    Args:
+        models_folder (str): The path to the models folder (usually project_name/models)
+    """
+    yml_files = glob(f"{models_folder}**/*.yml", recursive=True)
+    yaml_files = glob(f"{models_folder}**/*.yaml", recursive=True)
+    return yml_files + yaml_files
+
+
+# def main(project_name=args.project_name):
+#     # for each directory in project_name/models
+#     for model in glob(project_name + "/models/*/*.yml"):
+#         if "staging" in model:
+#             continue
+#         print(model)
+#         # convert the yaml to a dictionary
+#         mf_yml = convert_yml_to_dict(model)
+#         # convert the dictionary to zenlytic views
+#         zen_views = mf_dict_to_zen_views(mf_yml, original_file_path=model)
+#         # convert the zenlytic views to yaml
+#         zen_views_to_yaml(zen_views, project_name)
+
+
+# if __name__ == "__main__":
+#     main()

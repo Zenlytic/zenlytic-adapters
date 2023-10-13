@@ -1,0 +1,63 @@
+default_date: first_ordered_at
+description: 'Customer grain mart.
+
+  '
+fields:
+- field_type: dimension
+  name: customer_name
+  sql: customer_name
+  type: string
+- field_type: dimension
+  name: customer_type
+  sql: customer_type
+  type: string
+- field_type: dimension_group
+  name: first_ordered_at
+  sql: first_ordered_at
+  timeframes:
+  - raw
+  - date
+  - week
+  - month
+  - quarter
+  - year
+  - month_of_year
+  type: time
+- field_type: dimension_group
+  name: last_ordered_at
+  sql: last_ordered_at
+  timeframes:
+  - raw
+  - date
+  - week
+  - month
+  - quarter
+  - year
+  - month_of_year
+  type: time
+- description: Total count of orders per customer.
+  field_type: measure
+  hidden: true
+  name: count_lifetime_orders
+  sql: count_lifetime_orders
+  type: sum
+- description: Customer lifetime spend before taxes.
+  field_type: measure
+  hidden: true
+  name: lifetime_spend_pretax
+  sql: lifetime_spend_pretax
+  type: sum
+- description: Gross customer lifetime spend inclusive of taxes.
+  field_type: measure
+  hidden: true
+  name: lifetime_spend
+  sql: lifetime_spend
+  type: sum
+identifiers:
+- name: customer
+  sql: customer_id
+  type: primary
+model_name: customers
+name: customers
+type: view
+version: 1
