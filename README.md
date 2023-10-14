@@ -3,13 +3,31 @@
 Utilities for converting semantic layer YAML files to Zenlytic's format.
 
 ## Steps for usage:
-1. Clone this repo in a valid dbt project
-1. Run `dbt parse` to generate model yaml files in Metricflow format, if you haven't already. They should live in your dbt project's `models` directory.
-1. `cd` into the newly cloned repo
-1. Run `python3 -m pip install .`
-1. `cd` back into the dbt project
-1. Run `mf_to_zen --project_name .`
-1. You should now see a `views` directory in your dbt project containing your Metricflow semantic models represented as Zenlytic views.
+1. Run `pip install metricflow-to-zenlytic`
+2. `$ metricflow_to_zenlytic [DIRECTORY]` from the command line, where `[DIRECTORY]` is the directory your `dbt_project.yml` file is in.
 
-## To test
-`pytest`
+## Usage in Python
+
+To run the function in python you can do so like this:
+
+```
+from metricflow_to_zenlytic.metricflow_to_zenlytic import (
+    load_mf_project,
+    convert_mf_project_to_zenlytic_project,
+)
+
+# Load the metricflow project
+metricflow_project = load_mf_project(metricflow_folder)
+
+# Convert to Zenyltic models and views
+models, views = convert_mf_project_to_zenlytic_project(metricflow_project, "my_model", "my_company")
+
+# Save as yaml files
+out_directory = '/save/to/here/'
+zenlytic_views_to_yaml(models, views, out_directory)
+
+```
+
+## Testing
+
+`$ pytest`
