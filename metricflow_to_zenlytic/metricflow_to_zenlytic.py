@@ -124,7 +124,7 @@ def convert_mf_dimension_to_zenlytic_dimension(mf_dimension: dict):
 def convert_mf_measure_to_zenlytic_measure(mf_measure: dict):
     field_dict = {
         "name": mf_measure["name"],
-        "sql": mf_measure["expr"] if "expr" in mf_measure else mf_measure["name"],
+        "sql": str(mf_measure["expr"]) if "expr" in mf_measure else mf_measure["name"],
         "type": mf_measure["agg"],
         "field_type": "measure",
     }

@@ -45,7 +45,7 @@ def test_e2e_conversions():
     orders_view = next(v for v in views if v["name"] == "orders")
 
     order_count = next(m for m in orders_view["fields"] if "_order_count" == m["name"])
-    order_count["sql"] = "1"
+    assert order_count["sql"] == "1"
 
     customers_with_fields_metric = next(
         m for m in orders_view["fields"] if "customers_with_orders" == m["name"]
