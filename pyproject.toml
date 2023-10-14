@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "zenlytic-adapters"
+name = "metricflow-to-zenlytic"
 version = "0.1.0"
 description = "Adapters for Zenyltic"
 authors = ["Paul Blankley <paul@zenlytic.com>"]
