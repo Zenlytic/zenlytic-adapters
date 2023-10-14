@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "metricflow-to-zenlytic"
-version = "0.1.1"
+version = "0.1.2"
 description = "Adapter for Metricflow to Zenlytic"
 authors = ["Paul Blankley <paul@zenlytic.com>"]
 keywords = ["Metrics Layer", "Business Intelligence", "Analytics"]
