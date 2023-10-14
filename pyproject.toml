@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "metricflow-to-zenlytic"
-version = "0.1.0"
-description = "Adapters for Zenyltic"
+version = "0.1.1"
+description = "Adapter for Metricflow to Zenlytic"
 authors = ["Paul Blankley <paul@zenlytic.com>"]
 keywords = ["Metrics Layer", "Business Intelligence", "Analytics"]
 readme = "README.md"

@@ -19,7 +19,7 @@ def convert_mf_project_to_zenlytic_project(
     model = {"version": 1, "type": "model", "name": project_name, "connection": connection_name}
     views = []
     for _, semantic_model in mf_project.items():
-        views.append(convert_mf_view_to_zenlytic_view(semantic_model, all_measures))
+        views.append(convert_mf_view_to_zenlytic_view(semantic_model, model["name"], all_measures))
 
     return [model], views
 
@@ -55,9 +55,9 @@ def load_mf_project(models_folder: str):
 
 
 def convert_mf_view_to_zenlytic_view(
-    mf_semantic_model: dict, all_measures: list, original_file_path: str = None
+    mf_semantic_model: dict, model_name: str, all_measures: list, original_file_path: str = None
 ):
-    zenlytic_data = {"version": 1, "type": "view", "fields": [], "identifiers": []}
+    zenlytic_data = {"version": 1, "type": "view", "model_name": model_name, "fields": [], "identifiers": []}
 
     mf_metrics = mf_semantic_model.get("metrics", [])
 
@@ -66,7 +66,7 @@ def convert_mf_view_to_zenlytic_view(
 
     # Get view-level values
     zenlytic_data["name"] = mf_semantic_model["name"]
-    zenlytic_data["model_name"] = extract_inner_text(mf_semantic_model["model"])
+    zenlytic_data["sql_table_name"] = extract_inner_text(mf_semantic_model["model"])
     zenlytic_data["description"] = mf_semantic_model.get("description", None)
     default_date = mf_semantic_model.get("defaults", {}).get("agg_time_dimension")
 
