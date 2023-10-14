@@ -320,27 +320,37 @@ def extract_inner_text(s):
     return None
 
 
-def zen_views_to_yaml(zenlytic_data, project_name, write_to_file=True):
-    views_dir = project_name + "/views"
-    if not os.path.exists(views_dir) and write_to_file:
-        os.makedirs(views_dir)
+def zenlytic_views_to_yaml(zenlytic_models, zenlytic_views, directory: str = None, write_to_file=True):
+    view_directory = os.path.join(directory, "views") if directory else "./views"
+    model_directory = os.path.join(directory, "models") if directory else "./models"
 
-    views_yaml = []
-    for zen_view in zenlytic_data:
+    if not os.path.exists(view_directory) and write_to_file:
+        os.makedirs(view_directory)
+
+    if not os.path.exists(model_directory) and write_to_file:
+        os.makedirs(model_directory)
+
+    zenlytic_yaml = []
+    for zenlytic_file in zenlytic_models + zenlytic_views:
         # write the yaml to views/model_name.yml
         if write_to_file:
-            og_file_path = zen_view["original_file_path"]
+            if "original_file_path" in zenlytic_file:
+                file_path = zenlytic_file["original_file_path"]
+            else:
+                file_path = f"{zenlytic_file['name']}_{zenlytic_file['type']}.yml"
 
-            # get the model name from the original file path
-            model_name = og_file_path.split("/")[-1].split(".")[0]
+            if zenlytic_file["type"] == "model":
+                write_to_path = os.path.join(model_directory, file_path)
+            else:
+                write_to_path = os.path.join(view_directory, file_path)
             # write the yaml to views/model_name.yml
-            with open(views_dir + "/" + model_name + ".yml", "w") as outfile:
-                yaml.dump(zen_view, outfile, default_flow_style=False)
+            with open(write_to_path, "w") as outfile:
+                yaml.dump(zenlytic_file, outfile, default_flow_style=False)
 
         # add the yaml string to views_yaml
-        views_yaml.append(yaml.dump(zen_view, default_flow_style=False))
+        zenlytic_yaml.append(yaml.dump(zenlytic_file, default_flow_style=False))
 
-    return views_yaml
+    return zenlytic_yaml
 
 
 def read_mf_project_files(models_folder: str):

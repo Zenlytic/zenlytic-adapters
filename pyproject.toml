@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "zenlytic-adapters"
+version = "0.1.0"
+description = "Adapters for Zenyltic"
+authors = ["Paul Blankley <paul@zenlytic.com>"]
+keywords = ["Metrics Layer", "Business Intelligence", "Analytics"]
+readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/Zenlytic/zenlytic-adapters"
+repository = "https://github.com/Zenlytic/zenlytic-adapters"
+documentation = "https://github.com/Zenlytic/zenlytic-adapters"
+
+[tool.poetry.dependencies]
+python = ">=3.8.1, <3.12"
+PyYAML = "^6.0"
+click = "^8.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.5"
+black = "^22.3.0"
+flake8 = "^3.9.2"
+isort = "^5.9.3"
+
+[tool.black]
+line-length = 110
+
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+metricflow_to_zenlytic = 'metricflow_to_zenlytic:cli_group'
