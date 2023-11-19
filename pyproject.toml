@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "metricflow-to-zenlytic"
-version = "0.1.2"
+version = "0.1.3"
 description = "Adapter for Metricflow to Zenlytic"
 authors = ["Paul Blankley <paul@zenlytic.com>"]
 keywords = ["Metrics Layer", "Business Intelligence", "Analytics"]
@@ -11,7 +11,7 @@ repository = "https://github.com/Zenlytic/zenlytic-adapters"
 documentation = "https://github.com/Zenlytic/zenlytic-adapters"
 
 [tool.poetry.dependencies]
-python = ">=3.8.1, <3.12"
+python = ">=3.8.1, <3.14"
 PyYAML = "^6.0"
 click = "^8.0"
 
