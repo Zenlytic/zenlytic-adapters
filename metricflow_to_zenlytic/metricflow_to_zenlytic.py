@@ -1,4 +1,4 @@
-import yaml
+import ruamel.yaml
 from glob import glob
 import os
 import re
@@ -303,14 +303,12 @@ def _extract_filter_sql(filter_string):
     return filter_string
 
 
-def convert_yml_to_dict(yml_path):
-    with open(yml_path, "r") as stream:
-        try:
-            yaml_data = yaml.safe_load(stream)
-            return yaml_data
-        except yaml.YAMLError as exc:
-            print(exc)
-    return None
+def convert_yml_to_dict(path):
+    yaml = ruamel.yaml.YAML(typ="rt")
+    yaml.version = (1, 1)
+    with open(path, "r") as f:
+        yaml_dict = yaml.load(f)
+    return yaml_dict
 
 
 def extract_inner_text(s):
@@ -344,13 +342,21 @@ def zenlytic_views_to_yaml(zenlytic_models, zenlytic_views, directory: str = Non
             else:
                 write_to_path = os.path.join(view_directory, file_path)
             # write the yaml to views/model_name.yml
-            with open(write_to_path, "w") as outfile:
-                yaml.dump(zenlytic_file, outfile, default_flow_style=False)
+            dump_yaml_to_file(zenlytic_file, write_to_path)
 
         # add the yaml string to views_yaml
-        zenlytic_yaml.append(yaml.dump(zenlytic_file, default_flow_style=False))
+        zenlytic_yaml.append(dump_yaml_to_file(zenlytic_file))
 
     return zenlytic_yaml
+
+
+def dump_yaml_to_file(data, path: str = None):
+    filtered_data = {k: v for k, v in data.items() if not k.startswith("_")}
+    if path is None:
+        return ruamel.yaml.dump(filtered_data, Dumper=ruamel.yaml.RoundTripDumper)
+    else:
+        with open(path, "w") as f:
+            ruamel.yaml.dump(filtered_data, f, Dumper=ruamel.yaml.RoundTripDumper)
 
 
 def read_mf_project_files(models_folder: str):
