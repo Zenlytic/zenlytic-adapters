@@ -66,7 +66,10 @@ def convert_mf_view_to_zenlytic_view(
 
     # Get view-level values
     zenlytic_data["name"] = mf_semantic_model["name"]
-    zenlytic_data["sql_table_name"] = extract_inner_text(mf_semantic_model["model"])
+    if "sql_table_name" in mf_semantic_model.get("meta", {}):
+        zenlytic_data["sql_table_name"] = mf_semantic_model["meta"]["sql_table_name"]
+    else:
+        zenlytic_data["sql_table_name"] = extract_inner_text(mf_semantic_model["model"])
     zenlytic_data["description"] = mf_semantic_model.get("description", None)
     default_date = mf_semantic_model.get("defaults", {}).get("agg_time_dimension")
 

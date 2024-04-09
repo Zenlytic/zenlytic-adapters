@@ -40,10 +40,12 @@ def test_e2e_conversions():
     # All measures are hidden in this view, because there are no metrics
     assert all(f["hidden"] for f in customers_view["fields"] if f["field_type"] == "measure")
     assert customers_view["model_name"] == "my_model"
-    assert customers_view["sql_table_name"] == "customers"
+    assert customers_view["sql_table_name"] == "my-bigquery-project.my_dataset.customers"
 
     orders_view = next(v for v in views if v["name"] == "orders")
 
+    assert orders_view["model_name"] == "my_model"
+    assert orders_view["sql_table_name"] == "orders"
     order_count = next(m for m in orders_view["fields"] if "_order_count" == m["name"])
     assert order_count["sql"] == "1"
 
