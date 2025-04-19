@@ -6,6 +6,10 @@ import re
 from .metricflow_types import MetricflowMetricTypes
 
 
+class ZenlyticUnsupportedError(Exception):
+    pass
+
+
 def convert_mf_project_to_zenlytic_project(
     mf_project: dict, project_name: str = "mf_project_name", connection_name: str = "mf_connection_name"
 ):
@@ -78,18 +82,27 @@ def convert_mf_view_to_zenlytic_view(
 
     # dimensions to fields.dimensions
     for dimension in mf_semantic_model.get("dimensions", []):
-        field_dict = convert_mf_dimension_to_zenlytic_dimension(dimension)
-        zenlytic_data["fields"].append(field_dict)
+        try:
+            field_dict = convert_mf_dimension_to_zenlytic_dimension(dimension)
+            zenlytic_data["fields"].append(field_dict)
+        except ZenlyticUnsupportedError:
+            pass
 
     # measures to measures
     for measure in mf_semantic_model.get("measures", []):
-        field_dict = convert_mf_measure_to_zenlytic_measure(measure)
-        zenlytic_data["fields"].append(field_dict)
+        try:
+            field_dict = convert_mf_measure_to_zenlytic_measure(measure)
+            zenlytic_data["fields"].append(field_dict)
+        except ZenlyticUnsupportedError:
+            pass
 
     for metric in mf_metrics:
-        metric_dict, added_measures = convert_mf_metric_to_zenlytic_measure(metric, all_measures)
-        zenlytic_data["fields"].append(metric_dict)
-        zenlytic_data["fields"].extend(added_measures)
+        try:
+            metric_dict, added_measures = convert_mf_metric_to_zenlytic_measure(metric, all_measures)
+            zenlytic_data["fields"].append(metric_dict)
+            zenlytic_data["fields"].extend(added_measures)
+        except ZenlyticUnsupportedError:
+            pass
 
     # entities to identifiers
     for entity in mf_semantic_model["entities"]:
@@ -121,6 +134,9 @@ def convert_mf_dimension_to_zenlytic_dimension(mf_dimension: dict):
     if label := mf_dimension.get("label"):
         field_dict["label"] = label
 
+    if mf_dimension.get("meta") and isinstance(mf_dimension["meta"], dict):
+        field_dict = {**field_dict, **mf_dimension["meta"].get("zenlytic", {})}
+
     return field_dict
 
 
@@ -151,6 +167,9 @@ def convert_mf_measure_to_zenlytic_measure(mf_measure: dict):
 
     if label := mf_measure.get("label"):
         field_dict["label"] = label
+
+    if mf_measure.get("config", {}).get("meta") and isinstance(mf_measure["config"]["meta"], dict):
+        field_dict = {**field_dict, **mf_measure["config"]["meta"].get("zenlytic", {})}
 
     return field_dict
 
@@ -248,7 +267,7 @@ def convert_mf_metric_to_zenlytic_measure(mf_metric: dict, measures: list) -> li
         metric_dict["sql"] = expr
 
     else:
-        raise TypeError(f"Metric type {mf_metric['type']} not supported")
+        raise ZenlyticUnsupportedError(f"Metric type {mf_metric['type']} not supported")
 
     if description := mf_metric.get("description"):
         metric_dict["description"] = description
@@ -256,8 +275,8 @@ def convert_mf_metric_to_zenlytic_measure(mf_metric: dict, measures: list) -> li
     if "agg_time_dimension" in mf_metric:
         metric_dict["canon_date"] = mf_metric["agg_time_dimension"]
 
-    if "meta" in mf_metric:
-        metric_dict["extra"] = mf_metric["meta"]
+    if mf_metric.get("config", {}).get("meta") and isinstance(mf_metric["config"]["meta"], dict):
+        metric_dict = {**metric_dict, **mf_metric["config"]["meta"].get("zenlytic", {})}
 
     return metric_dict, additional_measures
 
@@ -273,7 +292,8 @@ def apply_filter_to_metric(
     mf_measure: dict, mf_metric: dict, extra_metric_params: dict = {}, new_measure_name: str = None
 ):
     measure_dict = convert_mf_measure_to_zenlytic_measure(mf_measure)
-    metric_dict = {**measure_dict, **extra_metric_params, "hidden": False}
+    hidden = not mf_metric.get("config", {}).get("enabled", True)
+    metric_dict = {**measure_dict, **extra_metric_params, "hidden": hidden}
 
     # If there's a filter, re-write the sql to include the filter
     additional_measures = []
@@ -294,16 +314,28 @@ def _extract_filter_sql(filter_string):
     """A filter will look like
     "{{ Dimension('order__is_food_order') }} = True
     We want to turn it into a valid filter statement like ${order.is_food_order} = True
+    We do NOT currently support Metric or Entity type filters
     """
+    if "Entity(" in filter_string:
+        raise ZenlyticUnsupportedError("Entity type filters are not supported")
+    if "Metric(" in filter_string:
+        raise ZenlyticUnsupportedError("Metric type filters are not supported")
     matches = re.findall(r"{{\s*Dimension\('(.+?)'\)\s*}}\s*([=><!]+)\s*(.+?)\s*(and|or|$)", filter_string)
     for match in matches:
         column_name = match[0].replace("__", ".")
-        # operator = match[1]
-        # value = match[2]
         replacement = "${" + column_name + "}"
         filter_string = filter_string.replace(f"Dimension('{match[0]}')", replacement)
-        filter_string = filter_string.replace("{{", "").replace("}}", "")
-    return filter_string
+    # First get the dimension name and grain
+    time_dim_matches = re.findall(
+        r"""TimeDimension\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)""", filter_string
+    )
+    for match in time_dim_matches:
+        column_name = match[0].replace("__", ".")
+        time_grain = match[1].replace("day", "date")
+
+        replacement = "${" + f"{column_name}_{time_grain}" + "}"
+        filter_string = filter_string.replace(f"TimeDimension('{match[0]}', '{match[1]}')", replacement)
+    return filter_string.replace("{{", "").replace("}}", "")
 
 
 def convert_yml_to_dict(path):

@@ -4,6 +4,7 @@ from metricflow_to_zenlytic.metricflow_to_zenlytic import (
     convert_mf_measure_to_zenlytic_measure,
     convert_mf_entity_to_zenlytic_identifier,
     convert_mf_metric_to_zenlytic_measure,
+    ZenlyticUnsupportedError,
 )
 
 
@@ -23,6 +24,7 @@ from metricflow_to_zenlytic.metricflow_to_zenlytic import (
             "expr": "date_trunc('day', ts_deleted)",
             "is_partition": True,
             "type_params": {"time_granularity": "day"},
+            "meta": {"zenlytic": {"zoe_description": "Deleted at field"}},
         },
     ],
 )
@@ -43,7 +45,9 @@ def test_dimension_conversion(mf_dimension):
             "type": "time",
             "sql": "date_trunc('day', ts_deleted)",
             "timeframes": ["raw", "date", "week", "month", "quarter", "year", "month_of_year"],
+            "zoe_description": "Deleted at field",
         }
+
     elif mf_dimension["name"] == "no_sql":
         correct = {
             "name": "no_sql",
@@ -73,7 +77,11 @@ def test_dimension_conversion(mf_dimension):
             "agg": "average",
             "expr": "case when email not ilike '%internal.com' then revenue end",
         },
-        {"name": "quick_buy_transactions", "agg": "sum_boolean"},
+        {
+            "name": "quick_buy_transactions",
+            "agg": "sum_boolean",
+            "config": {"meta": {"zenlytic": {"zoe_description": "Quick buy transactions"}}},
+        },
         {"name": "last_purchase", "agg": "max", "expr": "purchase_date", "create_metric": True},
     ],
 )
@@ -106,6 +114,7 @@ def test_measure_conversion(mf_measure):
             "sql": "CAST(quick_buy_transactions AS INT)",
             "type": "sum",
             "hidden": True,
+            "zoe_description": "Quick buy transactions",
         }
     elif mf_measure["name"] == "last_purchase":
         correct = {"name": "last_purchase", "field_type": "measure", "sql": "purchase_date", "type": "max"}
@@ -141,7 +150,39 @@ def test_measure_conversion(mf_measure):
             "type": "SIMPLE",
             "label": "Large Orders",
             "type_params": {"measure": "orders"},
+            "config": {
+                "meta": {"zenlytic": {"zoe_description": "Order with order values over 20."}},
+                "enabled": False,
+            },
             "filter": "{{Dimension('customer__order_total_dim')}} >= 20",
+        },
+        {
+            "name": "many_filters_fail",
+            "description": "Unique count of customers with many filters",
+            "type": "SIMPLE",
+            "label": "Many Filters",
+            "type_params": {"measure": "customers"},
+            "filter": (
+                "{{ Metric('food_revenue', group_by=['order_id']) }} > 0 "
+                "and {{ Entity('product') }} in ('P3150104', 'P3150105') "
+                "and {{ Dimension('customer__customer_type') }} = 'new' "
+                "and ( {{ TimeDimension('customer__first_ordered_at', 'month') }} = '2024-01-01' "
+                "or  {{ TimeDimension('customer__first_ordered_at', 'month') }} = '2024-02-01' "
+                "or {{ TimeDimension('customer__first_ordered_at', 'day') }} is null)"
+            ),
+        },
+        {
+            "name": "many_filters",
+            "description": "Unique count of customers with many filters",
+            "type": "SIMPLE",
+            "label": "Many Filters",
+            "type_params": {"measure": "customers"},
+            "filter": (
+                "{{ Dimension('customer__customer_type') }} = 'new' "
+                "and ( {{ TimeDimension('customer__first_ordered_at', 'month') }} = '2024-01-01' "
+                "or  {{ TimeDimension('customer__first_ordered_at', 'month') }} = '2024-02-01' "
+                "or {{ TimeDimension('customer__first_ordered_at', 'day') }} is null)"
+            ),
         },
         {
             "name": "food_order_pct",
@@ -209,7 +250,13 @@ def test_metric_conversion(mf_metric):
         {"name": "order_total", "agg": "sum", "expr": "num_order_total"},
         {"name": "order_cost", "agg": "sum", "expr": "num_order_cost"},
     ]
-    converted, _ = convert_mf_metric_to_zenlytic_measure(mf_metric, measures)
+    try:
+        converted, _ = convert_mf_metric_to_zenlytic_measure(mf_metric, measures)
+    except ZenlyticUnsupportedError as e:
+        if "Entity type filters are not supported" in str(e) and mf_metric["name"] == "many_filters_fail":
+            converted = {}
+        else:
+            raise e
 
     if mf_metric["name"] == "cumulative_metric":
         correct = {
@@ -235,11 +282,28 @@ def test_metric_conversion(mf_metric):
         correct = {
             "name": "large_orders",
             "field_type": "measure",
-            "hidden": False,
+            "hidden": True,
             "sql": "case when ${customer.order_total_dim} >= 20 then id_order else null end",
             "type": "count_distinct",
             "label": "Large Orders",
             "description": "Order with order values over 20.",
+            "zoe_description": "Order with order values over 20.",
+        }
+    elif mf_metric["name"] == "many_filters_fail":
+        correct = {}
+    elif mf_metric["name"] == "many_filters":
+        correct = {
+            "name": "many_filters",
+            "field_type": "measure",
+            "hidden": False,
+            "sql": "case when  ${customer.customer_type}  = 'new' and (  "
+            "${customer.first_ordered_at_month}  = '2024-01-01' or   "
+            "${customer.first_ordered_at_month}  = '2024-02-01' or  "
+            "${customer.first_ordered_at_date}  is null) then id_customer else "
+            "null end",
+            "type": "count_distinct",
+            "label": "Many Filters",
+            "description": "Unique count of customers with many filters",
         }
     elif mf_metric["name"] == "food_order_pct":
         correct = {

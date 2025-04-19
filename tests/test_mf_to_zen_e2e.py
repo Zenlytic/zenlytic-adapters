@@ -57,7 +57,8 @@ def test_e2e_conversions():
     assert customers_with_fields_metric["sql"] == "customer_id"
     assert customers_with_fields_metric["type"] == "count_distinct"
     assert customers_with_fields_metric["label"] == "Customers w/ Orders"
-    assert customers_with_fields_metric["description"] == "Distict count of customers placing orders"
+    assert customers_with_fields_metric["description"] == "Unique count of customers placing orders"
+    assert customers_with_fields_metric["zoe_description"] == "Distinct count of customers placing orders"
 
     order_total_dim = next(m for m in orders_view["fields"] if "order_total_dim" == m["name"])
     assert order_total_dim["field_type"] == "dimension"
