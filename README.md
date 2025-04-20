@@ -1,3 +1,8 @@
+# This repo has moved, and this location is no longer maintained.
+
+It has moved to the main [metrics layer repo](https://github.com/Zenlytic/metrics_layer).
+
+
 # Zenlytic Adapters
 
 Utilities for converting semantic layer YAML files to Zenlytic's format.
